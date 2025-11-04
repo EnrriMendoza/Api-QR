@@ -8,19 +8,24 @@ from io import BytesIO
 import base64
 import random
 
+# --------------------------------------------------------
+# Configuración principal
+# --------------------------------------------------------
 app = FastAPI()
 cdc_storage = {}  # {(qr_id, session_id): cdc_id}
 
-# ---- CORS ----
+# Permitir solicitudes desde cualquier origen (GitHub Pages, APEX, etc.)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permite GitHub Pages y APEX
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---- MODELOS ----
+# --------------------------------------------------------
+# Modelos de datos
+# --------------------------------------------------------
 class QRRequest(BaseModel):
     session_id: str
 
@@ -29,9 +34,12 @@ class CDCRequest(BaseModel):
     cdc_id: str
     session_id: str
 
-# ---- HANDLER PARA PRE-REQUEST (CORS) ----
+# --------------------------------------------------------
+# Respuesta a preflight (CORS OPTIONS)
+# --------------------------------------------------------
 @app.options("/{rest_of_path:path}")
 async def preflight_handler(request: Request, rest_of_path: str):
+    """Responde correctamente a las peticiones OPTIONS para evitar errores CORS."""
     return JSONResponse(
         content={},
         headers={
@@ -41,7 +49,9 @@ async def preflight_handler(request: Request, rest_of_path: str):
         }
     )
 
-# ---- GENERAR QR ----
+# --------------------------------------------------------
+# Generar QR
+# --------------------------------------------------------
 @app.post("/qr/generador")
 def generar_qr(request: QRRequest):
     qr_id = random.randint(1, 999999)
@@ -63,20 +73,39 @@ def generar_qr(request: QRRequest):
     img.save(buffer, format="PNG", optimize=True)
     qr_bytes = buffer.getvalue()
 
-    return {"qr": base64.b64encode(qr_bytes).decode(), "url": qr_data, "qr_id": qr_id}
+    return {
+        "qr": base64.b64encode(qr_bytes).decode(),
+        "url": qr_data,
+        "qr_id": qr_id
+    }
 
-# ---- GUARDAR CDC ----
+# --------------------------------------------------------
+# Guardar CDC (desde la web del celular)
+# --------------------------------------------------------
 @app.post("/qr/guardar-cdc")
 def guardar_cdc(request: CDCRequest):
-    if not request.cdc_id.strip():
+    if not request.cdc_id or not request.cdc_id.strip():
         raise HTTPException(status_code=400, detail="cdc_id no puede estar vacío")
 
-    key = (request.qr_id, request.session_id.strip())
-    cdc_storage[key] = request.cdc_id.strip()
-    return {"status": "ok", "message": "CDC guardado", "qr_id": request.qr_id}
+    if not request.session_id or not str(request.session_id).strip():
+        raise HTTPException(status_code=400, detail="session_id no puede estar vacío")
 
-# ---- VERIFICAR CDC ----
+    normalized_session_id = str(request.session_id).strip()
+    key = (request.qr_id, normalized_session_id)
+    cdc_storage[key] = request.cdc_id.strip()
+
+    return {
+        "status": "ok",
+        "message": f"CDC '{request.cdc_id}' guardado correctamente",
+        "qr_id": request.qr_id,
+        "session_id": normalized_session_id
+    }
+
+# --------------------------------------------------------
+# Verificar si APEX ya tiene un CDC asociado
+# --------------------------------------------------------
 @app.get("/qr/verificar-cdc")
 def verificar_cdc(qr_id: int = Query(...), session_id: str = Query(...)):
     key = (qr_id, session_id.strip())
-    return {"cdc_id": cdc_storage.get(key)}
+    cdc_id = cdc_storage.get(key)
+    return {"cdc_id": cdc_id, "found": cdc_id is not None, "qr_id": qr_id}
